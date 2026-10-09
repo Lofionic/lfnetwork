@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+/.build
+/Packages
+/.swiftpm
+.netrc
+
+# Libraries shouldn't pin dependency versions for their clients
+Package.resolved
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcscmblueprint
+
+# IDEs
+.idea/
+.vscode/
