@@ -7,6 +7,7 @@ Describe each endpoint as a small `HTTPRequest` type, and `HTTPService` handles 
 - **Typed requests**: each endpoint declares its method, path, query, body and response type
 - **Swift concurrency**: `async throws` APIs, `Sendable` throughout, and cancelling a task cancels its request
 - **Automatic retries** for network failures and `408`/`429`/`5xx` responses, honouring `Retry-After`
+- **Background uploads** that finish even if the app is suspended or quits, using a background `URLSession`
 - **No dependencies**
 
 ## Requirements
@@ -164,6 +165,50 @@ struct Ping: HTTPRequest {
     var retryPolicy: RetryPolicy? { RetryPolicy.none }
 }
 ```
+
+### Background uploads
+
+`HTTPService` sends requests from your app's process, so a request stops if the system suspends the app. For a request that should finish anyway, such as a slow request started from a background task, use `BackgroundHTTPService`. It hands the upload to the system, which finishes it even if the app is suspended or quits. When the response arrives, the system relaunches the app in the background if needed.
+
+Create one `BackgroundHTTPService` per session identifier, early in your app's launch, and keep it for the life of the app. The system delivers finished uploads to the service that owns the session, including after a relaunch:
+
+```swift
+let uploads = BackgroundHTTPService(
+    sessionIdentifier: "com.example.app.uploads",
+    scheme: .https,
+    domain: "api.example.com",
+    authorizationToken: token
+) { upload in
+    // upload.identifier: the identifier you gave the upload
+    // upload.requestBody: the JSON body that was sent
+    // upload.result: the response body, or the error
+    if let data = try? upload.result.get() {
+        // save the response
+    }
+}
+```
+
+Start an upload with any request whose `RequestBody` is `Encodable`. The identifier tells you which upload a result belongs to, so make it something you can act on later, such as a record's ID:
+
+```swift
+try uploads.upload(CreateUser(body: NewUser(name: "Ada")), identifier: "new-user-ada")
+```
+
+`upload(_:identifier:)` returns once the upload has started; the result arrives in the completion handler. When the system relaunches your app for a session, wait for the results before telling it you're done. In SwiftUI:
+
+```swift
+.backgroundTask(.urlSession("com.example.app.uploads")) {
+    await uploads.handleEventsForBackgroundURLSession()
+}
+```
+
+How background uploads differ from `HTTPService`:
+- The body is written to a file in the app's Caches folder while it's uploading, and removed when the upload finishes.
+- The system waits for a connection and retries network failures itself; the service's `RetryPolicy` isn't used.
+- Any `2xx` status is a success. A `401` fails with `HTTPServiceError.notAuthorized` and any other status with `.invalidStatusCode(statusCode:)`. A request's `acceptableStatusCodes` is ignored, because the result can arrive in a new launch of the app.
+- The response body is delivered as raw `Data`, for you to decode.
+
+To test code that starts uploads, depend on the `BackgroundHTTPServicing` protocol and substitute a mock, then call your completion handling directly with a `BackgroundUploadResult`.
 
 ### Testing
 
