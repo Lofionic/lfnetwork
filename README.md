@@ -207,6 +207,7 @@ How background uploads differ from `HTTPService`:
 - The system waits for a connection and retries network failures itself; the service's `RetryPolicy` isn't used.
 - Any `2xx` status is a success. A `401` fails with `HTTPServiceError.notAuthorized` and any other status with `.invalidStatusCode(statusCode:)`. A request's `acceptableStatusCodes` is ignored, because the result can arrive in a new launch of the app.
 - The response body is delivered as raw `Data`, for you to decode.
+- Results are handled one at a time, in the order the uploads finish.
 
 To test code that starts uploads, depend on the `BackgroundHTTPServicing` protocol and substitute a mock, then call your completion handling directly with a `BackgroundUploadResult`.
 

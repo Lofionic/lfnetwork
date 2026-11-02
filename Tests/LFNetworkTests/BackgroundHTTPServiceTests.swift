@@ -43,4 +43,22 @@ final class BackgroundHTTPServiceTests: XCTestCase {
             guard case HTTPServiceError.invalidResponse = error else { return XCTFail("Unexpected \(error)") }
         }
     }
+
+    func testWaitingForEventsReturnsWhenTheyFinishedFirst() async {
+        let delegate = Delegate(directory: FileManager.default.temporaryDirectory) { _ in }
+
+        delegate.urlSessionDidFinishEvents(forBackgroundURLSession: .shared)
+
+        await delegate.finishEvents()
+    }
+
+    func testWaitingForEventsReturnsOnceTheyFinish() async {
+        let delegate = Delegate(directory: FileManager.default.temporaryDirectory) { _ in }
+
+        async let waiting: Void = delegate.finishEvents()
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        delegate.urlSessionDidFinishEvents(forBackgroundURLSession: .shared)
+
+        await waiting
+    }
 }

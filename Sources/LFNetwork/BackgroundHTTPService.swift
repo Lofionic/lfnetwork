@@ -80,18 +80,13 @@ extension BackgroundHTTPService {
     }
 }
 
-private final class Delegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private struct State {
-        var responses: [Int: Data] = [:]
-        var completions: [UUID: Task<Void, Never>] = [:]
-        var hasFinishedEvents = false
-        var eventsFinished: CheckedContinuation<Void, Never>?
-    }
-
+final class Delegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let directory: URL
     private let onCompletion: @Sendable (BackgroundUploadResult) async -> Void
+    private let eventsFinished = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
     private let lock = NSLock()
-    private var state = State()
+    private var responses: [Int: Data] = [:]
+    private var lastCompletion: Task<Void, Never>?
 
     init(directory: URL, onCompletion: @escaping @Sendable (BackgroundUploadResult) async -> Void) {
         self.directory = directory
@@ -104,35 +99,19 @@ private final class Delegate: NSObject, URLSessionDataDelegate, @unchecked Senda
     }
 
     func finishEvents() async {
-        await withCheckedContinuation { continuation in
-            let hasFinished = withState { state in
-                if state.hasFinishedEvents {
-                    state.hasFinishedEvents = false
-                    return true
-                }
-                state.eventsFinished = continuation
-                return false
-            }
-            if hasFinished {
-                continuation.resume()
-            }
-        }
-        let completions = withState { state in
-            Array(state.completions.values)
-        }
-        for completion in completions {
-            await completion.value
-        }
+        var events = eventsFinished.stream.makeAsyncIterator()
+        await events.next()
+        await locked { lastCompletion }?.value
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        withState { $0.responses[dataTask.taskIdentifier, default: Data()].append(data) }
+        locked { responses[dataTask.taskIdentifier, default: Data()].append(data) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         guard let identifier = task.taskDescription else { return }
 
-        let data = withState { $0.responses.removeValue(forKey: task.taskIdentifier) ?? Data() }
+        let data = locked { responses.removeValue(forKey: task.taskIdentifier) ?? Data() }
         let file = file(for: identifier)
         let requestBody = (try? Data(contentsOf: file)) ?? Data()
         try? FileManager.default.removeItem(at: file)
@@ -142,30 +121,23 @@ private final class Delegate: NSObject, URLSessionDataDelegate, @unchecked Senda
             requestBody: requestBody,
             result: BackgroundHTTPService.result(data: data, response: task.response, error: error)
         )
-        let id = UUID()
         let onCompletion = onCompletion
-        withState { state in
-            state.completions[id] = Task {
+        locked {
+            let previous = lastCompletion
+            lastCompletion = Task {
+                await previous?.value
                 await onCompletion(upload)
-                self.withState { $0.completions[id] = nil }
             }
         }
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        let continuation = withState { state in
-            defer { state.eventsFinished = nil }
-            if state.eventsFinished == nil {
-                state.hasFinishedEvents = true
-            }
-            return state.eventsFinished
-        }
-        continuation?.resume()
+        eventsFinished.continuation.yield()
     }
 
-    private func withState<T>(_ body: (inout State) -> T) -> T {
+    private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        return body(&state)
+        return body()
     }
 }
