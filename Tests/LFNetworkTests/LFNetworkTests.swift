@@ -3,18 +3,8 @@ import XCTest
 import LFNetworkTestSupport
 
 final class LFNetworkTests: XCTestCase {
-    lazy var urlSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MockURLProtocol.self]
-
-        let session = URLSession(configuration: configuration)
-        return session
-    }()
-
-    override func tearDown() {
-        MockURLProtocol.requestHandler = nil
-        super.tearDown()
-    }
+    /// XCTest creates a new instance for each test, so each test gets its own session and handler.
+    let mock = MockURLSession()
 
     // MARK: - URL request construction
 
@@ -317,7 +307,7 @@ final class LFNetworkTests: XCTestCase {
 
     func testNetworkErrorIsRetriedThenRethrown() async throws {
         let recorder = RequestRecorder()
-        MockURLProtocol.requestHandler = { request in
+        mock.requestHandler = { request in
             recorder.record(request)
             throw URLError(.timedOut)
         }
@@ -330,6 +320,42 @@ final class LFNetworkTests: XCTestCase {
         XCTAssertEqual(recorder.count, 3)
     }
 
+    // MARK: - MockURLSession
+
+    func testMockSessionsHaveSeparateHandlers() async throws {
+        let other = MockURLSession { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let recorder = stub(statusCode: 200, data: Item.json)
+
+        let item = try await makeService().doRequest(GetRequest<Item>(path: "/items/1"))
+        XCTAssertEqual(item, Item(id: 1, name: "Widget"))
+        XCTAssertEqual(recorder.count, 1)
+
+        let (_, response) = try await other.urlSession.data(from: URL(string: "https://api.example.com/items/1")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 500)
+        XCTAssertEqual(recorder.count, 1)
+    }
+
+    func testMockSessionHidesItsIdentifierHeader() async throws {
+        let recorder = stub(statusCode: 200, data: Item.json)
+
+        _ = try await makeService().doRequest(GetRequest<Item>(path: "/items/1"))
+
+        let headers = try XCTUnwrap(recorder.request?.allHTTPHeaderFields)
+        XCTAssertFalse(headers.keys.contains { $0.lowercased().hasPrefix("x-mockurlsession") })
+    }
+
+    func testMissingHandlerFailsImmediately() async {
+        let error = await capturedError {
+            _ = try await self.makeService().doRequest(GetRequest<Data>(path: "/items"))
+        }
+
+        let urlError = try? XCTUnwrap(error as? URLError, "\(String(describing: error))")
+        XCTAssertEqual(urlError?.code, .resourceUnavailable)
+        XCTAssertTrue(urlError?.localizedDescription.contains("MockURLSession.requestHandler") == true)
+    }
+
     // MARK: - Helpers
 
     /// Retries are disabled unless a test opts in, so failure tests don't wait on back-off.
@@ -339,7 +365,7 @@ final class LFNetworkTests: XCTestCase {
         retryPolicy: RetryPolicy = .none) -> HTTPService
     {
         HTTPService(
-            urlSession: urlSession,
+            urlSession: mock.urlSession,
             scheme: .https,
             domain: "api.example.com",
             port: port,
@@ -358,7 +384,7 @@ final class LFNetworkTests: XCTestCase {
     @discardableResult
     private func stub(statusCodes: [Int], data: Data, headerFields: [String: String]? = nil) -> RequestRecorder {
         let recorder = RequestRecorder()
-        MockURLProtocol.requestHandler = { request in
+        mock.requestHandler = { request in
             let count = recorder.record(request)
             let statusCode = statusCodes[min(count, statusCodes.count) - 1]
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: headerFields)!
@@ -413,7 +439,7 @@ private struct TestRequest<RequestBody: Encodable & Sendable, Response: Sendable
 
 private typealias GetRequest<Response: Sendable> = TestRequest<Never, Response>
 
-/// Captures the request seen by `MockURLProtocol`. URLSession delivers the body as a stream, so it's read eagerly.
+/// Captures the request seen by `MockURLSession`. URLSession delivers the body as a stream, so it's read eagerly.
 private final class RequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _request: URLRequest?

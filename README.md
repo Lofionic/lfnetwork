@@ -8,7 +8,7 @@ Describe each endpoint as a small `HTTPRequest` type, and `HTTPService` handles 
 - **Swift concurrency**: `async throws` APIs, `Sendable` throughout, and cancelling a task cancels its request
 - **Automatic retries** for network failures and `408`/`429`/`5xx` responses, honouring `Retry-After`
 - **Background uploads** that finish even if the app is suspended or quits, using a background `URLSession`
-- **Test support**: `MockURLProtocol` stubs responses for any `URLSession`, in the `LFNetworkTestSupport` library
+- **Test support**: `MockURLSession` stubs responses for anything that takes a `URLSession`, in the `LFNetworkTestSupport` library
 - **No dependencies**
 
 ## Requirements
@@ -222,33 +222,33 @@ To test against `HTTPService` itself, or anything else that takes a `URLSession`
 .testTarget(name: "MyAppTests", dependencies: ["MyApp", "LFNetworkTestSupport"]),
 ```
 
-Then build a `URLSession` that uses `MockURLProtocol`, and set its `requestHandler` to return the response for each request:
+Then create a `MockURLSession` and inject its `urlSession`. Its `requestHandler` returns the response for each request:
 
 ```swift
 import LFNetwork
 import LFNetworkTestSupport
 
-let configuration = URLSessionConfiguration.ephemeral
-configuration.protocolClasses = [MockURLProtocol.self]
+let mock = MockURLSession { request in
+    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    return (response, Data(#"{"id":42,"name":"Ada"}"#.utf8))
+}
 
 let service = HTTPService(
-    urlSession: URLSession(configuration: configuration),
+    urlSession: mock.urlSession,
     scheme: .https,
     domain: "api.example.com",
     retryPolicy: .none
 )
 
-MockURLProtocol.requestHandler = { request in
-    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-    return (response, Data(#"{"id":42,"name":"Ada"}"#.utf8))
-}
-
 let user = try await service.doRequest(GetUser(id: 42))
 ```
 
-- **Network errors:** throw from the handler, for example `throw URLError(.timedOut)`, and the request fails with that error.
-- **No handler:** if `requestHandler` is `nil`, requests fail with `MockURLProtocol.MissingRequestHandlerError`.
-- **Request bodies:** `URLSession` passes the body to the handler as `request.httpBodyStream`, not `httpBody`.
-- **Parallel tests:** `requestHandler` is shared by every session, so tests that set it shouldn't run in parallel. Reset it to `nil` in `tearDown`. With Swift Testing, mark the suite `.serialized`.
+- **One handler per session:** each `MockURLSession` has its own handler, so tests can run in parallel. Create one per test, for example as a stored property of an `XCTestCase`, which gets a new instance for every test.
+- **Changing the response:** set `mock.requestHandler` at any time. The handler is `@Sendable` and is called on a background thread, so anything it captures must be thread-safe.
+- **Network errors:** throw a `URLError` from the handler, for example `throw URLError(.timedOut)`, and the request fails with it. URLSession converts other error types to a plain `NSError`.
+- **No handler:** if `requestHandler` is `nil`, or the `MockURLSession` has been released, requests fail with `URLError(.resourceUnavailable)`. Keep a reference to the `MockURLSession` while you use its session.
+- **Request bodies:** the body reaches the handler as `request.httpBodyStream`, not `httpBody`.
+
+`MockURLProtocol.requestHandler`, the single shared handler from 1.2.0, still works for sessions that register `MockURLProtocol` directly, but it's deprecated.
 
 See `Tests/LFNetworkTests` for a complete example.
