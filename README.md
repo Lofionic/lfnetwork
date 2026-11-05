@@ -249,6 +249,4 @@ let user = try await service.doRequest(GetUser(id: 42))
 - **No handler:** if `requestHandler` is `nil`, or the `MockURLSession` has been released, requests fail with `URLError(.resourceUnavailable)`. Keep a reference to the `MockURLSession` while you use its session.
 - **Request bodies:** the body reaches the handler as `request.httpBodyStream`, not `httpBody`.
 
-`MockURLProtocol.requestHandler`, the single shared handler from 1.2.0, still works for sessions that register `MockURLProtocol` directly, but it's deprecated.
-
 See `Tests/LFNetworkTests` for a complete example.
