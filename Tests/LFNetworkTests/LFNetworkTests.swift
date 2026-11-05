@@ -1,5 +1,6 @@
 import XCTest
 @testable import LFNetwork
+import LFNetworkTestSupport
 
 final class LFNetworkTests: XCTestCase {
     lazy var urlSession: URLSession = {
@@ -313,7 +314,22 @@ final class LFNetworkTests: XCTestCase {
         XCTAssertFalse(retries(HTTPServiceError.notAuthorized))
         XCTAssertFalse(retries(CancellationError()))
     }
-    
+
+    func testNetworkErrorIsRetriedThenRethrown() async throws {
+        let recorder = RequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(request)
+            throw URLError(.timedOut)
+        }
+
+        let error = await capturedError {
+            _ = try await self.makeService(retryPolicy: .fast).doRequest(GetRequest<Data>(path: "/items"))
+        }
+
+        XCTAssertEqual((error as? URLError)?.code, .timedOut)
+        XCTAssertEqual(recorder.count, 3)
+    }
+
     // MARK: - Helpers
 
     /// Retries are disabled unless a test opts in, so failure tests don't wait on back-off.

@@ -15,6 +15,10 @@ let package = Package(
             name: "LFNetwork",
             targets: ["LFNetwork"]
         ),
+        .library(
+            name: "LFNetworkTestSupport",
+            targets: ["LFNetworkTestSupport"]
+        ),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -25,9 +29,15 @@ let package = Package(
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
         ),
+        .target(
+            name: "LFNetworkTestSupport",
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+            ]
+        ),
         .testTarget(
             name: "LFNetworkTests",
-            dependencies: ["LFNetwork"],
+            dependencies: ["LFNetwork", "LFNetworkTestSupport"],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
